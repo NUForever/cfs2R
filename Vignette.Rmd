@@ -1,0 +1,229 @@
+---
+title: "Vignette cfs2R"
+author: "Iván Latorre"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette cfs2R}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+El paquete [`cfs2R`](https://github.com/NUForever/cfs2R) se encarga de hacer predicciones en tiempo real de variables meteorológicas utilizando inicialmente las predicciones del modelo numérico global [CFS v2 de la NOAA](http://cfs.ncep.noaa.gov/), que luego pasan por un proceso de Desagregación Espacial y Corrección de Sesgo (utilizando información disponible en estaciones meteorológicas a nivel local) para corregir magnitud y escala.
+
+## Ajustes previos
+La información base utilizada se encuentra en formato GRB2. `cfs2R` trabaja utilizando la información geoespacial en formato [NetCDF](https://www.unidata.ucar.edu/software/netcdf/). Trabajar con archivos NetCDF y GRIB2 no es trivial, el paquete `cfs2R` utiliza herramientas externas ([Climate Data Operators](https://code.mpimet.mpg.de/projects/cdo/), CDO) para las funciones de preproceso (conversión de los archivos GRIB2 a NetCDF y de corte de la zona de estudio). Es por esto, que para poder utilizar el paquete `cfs2R` es necesario tener instalado CDO en el sistema operativo.
+
+
+#### Instalación en Linux
+- sudo apt-get install cdo
+
+#### Instalación en Windows 10
+Desde 2017, Windows 10 provee oficialmente un subsistema Ubuntu (distribución de Linux) que
+funciona perfectamente y permite utilizar la terminal de Linux. Hay múltiples formas de instalar CDO en
+Windows, para que el paquete cfs2R funcione correctamente, se requiere seguir los siguientes pasos de
+instalación:
+
+1) En el menú de inicio, abrir “Microsoft Store”
+
+2) Buscar Ubuntu 16.04 LTS e instalar
+
+3) Abrir la terminal instalada de Ubuntu 16.04 LTS
+
+4) La primera vez que se abre, se debe indicar un nombre de usuario y contraseña
+
+5) Escribir los siguientes comandos:
+- sudo apt-get update
+- sudo apt-get upgrade
+- sudo apt-get install cdo
+
+Si existiesen problemas de instalación seguir las siguientes instrucciones:
+
+a) Panel de control
+
+b) Programas
+
+c) Programas y características. Activar o desactivar características de Windows
+
+d) Buscar la casilla: Subsistema de Windows para Linux
+
+e) Clikear y reiniciar
+
+f) Si la instalación se realizó correctamente,volver al paso 2
+
+g) Si no se pudo instalar correctamente, repetir el paso e, desactivar y reniciar, luego activar y reiniciar.
+
+## Uso
+Se mostrarán un ejemplos de uso para la predicción de precipitación diaria. Independientemente de la variable a predecir, las etapas a seguir son las siguientes:
+
+1) Modelación
+2) Validación
+3) Predicción en tiempo real
+
+Si ya ha realizado las etapas de Modelación y Validación previamente, no es necesario volver a repetirlas, y puede ir directamente a la etapa de predicción en tiempo real.
+
+### Ejemplo 1. Uso directo
+Las etapas de modelación y validación pueden tomar mucho tiempo en completarse. La cantidad de información en bruto que se inicialmente se utiliza es grande ya que es un modelo global. Una vez extraída solo la necesaria, por ejemplo para una zona de estudio de 100 Km x 100 Km, puede superar fácilmente 1 Tb. Es por esto que dependiendo de su velocidad de internet esto puede tomar varios días. Por otro lado una vez descargada la información, se debe procesar, lo que puede tomar varias horas dependiendo de su RAM.
+Es por esto que como primer ejemplo, se mostrará el funcionamiento en tiempo real, de forma directa, con un modelo de ajuste ya obtenido.
+
+Primero definiremos la variable a utilizar. En este caso será la precipitación diaria, que en el modelo CFS v2 viene como Precipitation Rate (internamente el paquete convertirá este ratio en precipitación diaria).
+```{r eval=FALSE} 
+VARIABLE = "prate"
+```
+
+Luego definimos una zona de estudio, en este caso, la zona está asociada a 3 cuencas en la zona centro de chile.
+```{r eval=FALSE} 
+lat1 = -74.500
+lat2 = -68.000
+lon1 = -31.653
+lon2 = -35.433
+```
+
+En la carpeta `/demo` del paquete, se adjuntan 3 archivos. Es recomendable crear un objeto con el directorio donde se encuentren estos archivos auxiliares. Estos archivos tienen información histórica de la precipitación en esa zona observada en estaciones meteorológicas, información de la ubicación de estas estaciones y finalmente información geográfica del centro de la grilla donde el modelo predice para dicha zona. En particular acá se utilizará información asociada a 38 estaciones meteorológicas de 3 cuencas en el centro de chile.
+```{r eval=FALSE}
+archivos_auxiliares = "~/cfs2R/demo"
+```
+
+Ahora se realizará el pre-proceso de la información en tiempo real del modelo CFSv2. Para ello se consulta la base de datos rotativa, se descargan los archivos, se convierten a NetCDF y se corta la zona de estudio. Se debe definir un directorio donde quedarán estos archivos. Este proceso puede tomar unos 10 minutos dependiendo de su velocidad de internet y memoria RAM.
+```{r eval=FALSE} 
+direct_realtime = "~/prate/realtime"
+preprocesscfsrealtime(variable = VARIABLE,
+                      lat1 = lat1, lat2 = lat2,
+                      lon1 = lon1, lon2 = lon2,
+                      direct = direct_realtime)
+```
+
+Ahora se corregirá el sesgo de estas predicciones y se desagregarán espacialmente.
+
+Primero cargaremos los coeficientes de ajuste estadístico para la corrección del sesgo, asociados a cada estación meteorológica por cada mes del año:
+```{r eval=FALSE}
+load("~/cfs2R/demo/COEFICIENTES.RData")
+```
+
+Finalmente se crean las series predictoras en tiempo real. Este proceso debería tardar unos 15 segundos dependiendo de su RAM.
+```{r eval=FALSE} 
+RT = modelcfsrealtime(variable = VARIABLE , tol = 0.5 , p = 0.3 , n = 12 , coef = COEFICIENTES,
+                 direct = direct_realtime, auxfiles = archivos_auxiliares)
+```
+En este caso, definimos algunas variables de modelación:
+- Una tolerancia `tol`, bajo la cual todas las predicciones serán declaradas nulas. Se recomienda utilizar 0.5 mm.
+- Una probabilidad `p`, bajo la cual las predicciones serán declaradas nulas. En este caso se utilizó 0.3 o 30%.
+- Una cantidad de días `n`, que se tomarán para ponderar la predicción de un día en particular. En este caso se utilizaron los 12 días previos.
+
+```{r eval=FALSE}
+View(RT)
+```
+Puede ver esta matriz, que contiene las predicciones 7 días hacia adelante para la precipitación diaria en todas las estaciones meteorológicas.
+
+### Ejemplo 2. Uso completo
+
+### Información inicial
+Antes de iniciar el procesamiento de la información, vamos a definir algunos objetos de interés general que serán utilizados en todo el código.
+
+Variable a utilizar
+```{r eval=FALSE} 
+VARIABLE = "prate"
+```
+
+Coordenadas de la zona de estudio
+```{r eval=FALSE} 
+lat1 = -74.500
+lat2 = -68.000
+lon1 = -31.653
+lon2 = -35.433
+```
+
+Lo primero es definir directorios donde quedará la información descargada para las etapas de modelación (pronósticos retrospectivos), la etapa de validación (pronósticos operacionales) y la etapa en tiempo real. En este caso, se guardará esta información en los siguientes directorios:
+
+```{r eval=FALSE} 
+direct_operational = "~/Desktop/PROY/DATA/6mope/prate"
+direct_reforecast = "~/Desktop/PROY/DATA/6m/prate"
+direct_realtime = "~/Desktop/PROY/DATA/6mreal/prate"
+```
+
+Adicionalmente, se debe definir un directorio donde se encuentran 3 archivos `.csv` que deben ser llamados:
+`est.csv`, `hest.csv` y `pred.csv`.
+```{r eval=FALSE}
+archivos_auxiliares = "~/Desktop/cfs2R/demo"
+```
+
+- `est.csv` : Archivo con nombres de las estaciones meteorológicas y sus coordenadas. Este archivo debe contener al menos 3 columnas: 1) `location`, nombre de la estación, 2) `lat`, latitud en formato decimal, 3) `lon`, longitud en formato decimal.
+
+- `hest.csv` : Archivo con series históricas observadas en cada estación. Este archivo debe contener una columna llamada `DateTime` (Respetar mayúsculas y minúsculas), donde se indican las fechas en formato día/mes/año y además una columna por cada estación meteorológica con los registros diarios de la variable. El nombre de la columna asociada a una estación meteorológica, será el nombre de la misma.
+
+- `pred.csv` : Archivo con los puntos geográficos donde el modelo está prediciendo para la zona de estudio. Estos puntos pueden ser extraídos 
+
+Para información mas detallada, se adjuntan estos archivos en la carpeta `demo` del paquete, asociados a 48 estaciones meteorológicas de 3 cuencas del centro de Chile.
+
+### 1 Modelación
+### Descarga, conversión y corte de archivos retrospectivos
+```{r eval=FALSE} 
+preprocess(product = "reforecast", variable = VARIABLE,
+           start = 1995010100, end = 2010122718,
+           lat1 = lat1, lon1 = lon1,
+           lat2 = lat2, lon2 = lon2,
+           direct = direct_reforecast)
+```
+
+Creación de matriz multidimensional
+```{r eval=FALSE} 
+MMREFORECAST = MMreforecast(variable = VARIABLE, direct = direct_reforecast)
+```
+
+Se encuentran los coeficientes por estación meteorológica y por cada mes
+```{r eval=FALSE} 
+COEFICIENTES = SDBCcfs(variable = VARIABLE, MMreforecast = MMREFORECAST,
+                       auxfiles = archivos_auxiliares, tol = 0.5)
+```
+
+### 2 Validación
+Descarga, conversión y corte de archivos operacionales
+```{r eval=FALSE} 
+preprocess(product = "operational", variable = VARIABLE,
+           start = 2011040100, end = 2016123118,
+           lat1 = lat1, lon1 = lon1,
+           lat2 = lat2, lon2 = lon2,
+           direct = direct_operational)
+```
+
+Creación de matriz multidimensional
+```{r eval=FALSE} 
+MMOPERATIONAL = MMoperational(variable = VARIABLE, direct = direct_operational)
+```
+
+
+Se crea una serie predictora para el período operacional, desagregada espacialmente y con el sesgo corregido
+```{r eval=FALSE} 
+SERIE_OPERACIONAL = modelcfs(tol = 0.5, n = 12, p = 0.3 ,
+                             coef = COEFICIENTES, MMoperational = MMOPERATIONAL,
+                             auxfiles = archivos_auxiliares)
+```
+
+
+Se encuentra un dataframe de estadígrafos de bondad de ajuste, para cada estación meteorológica y por cada mes.
+```{r eval=FALSE} 
+DFVERIFIC = verificationcfs(variable = VARIABLE, coef = COEFICIENTES, auxfiles = archivos_auxiliares,
+                            modelcfsoperational = SERIE_OPERACIONAL)
+```
+
+
+### 3 Tiempo Real
+Descarga, conversión y corte de archivos rotativos en tiempo real
+```{r eval=FALSE} 
+preprocesscfsrealtime(variable = VARIABLE,
+                      lat1 = lat1, lat2 = lat2,
+                      lon1 = lon1, lon2 = lon2,
+                      direct = direct_realtime)
+```
+
+Se crea serie predictora en tiempo real, desagregada espacialmente y con el sesgo corregido.
+```{r eval=FALSE} 
+RT = modelcfsrealtime(variable = VARIABLE , tol = 0.5 , p = 0.3 , n = 12 , coef = COEFICIENTES,
+                 direct = direct_realtime, auxfiles = archivos_auxiliares)
+```
